@@ -1,0 +1,1599 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="CS 184 Homework 3 write-up: path tracing, BVH acceleration, direct illumination, global illumination, and adaptive sampling." />
+  <meta name="keywords" content="CS184, homework 3, pathtracer, ray tracing, BVH, direct illumination, global illumination, adaptive sampling, monte carlo, rendering" />
+
+  <title>CS 184 Homework 3 — PathTracer Write-up</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+<script>
+  window.MathJax = {
+    tex: {
+      inlineMath: [['\\(', '\\)']],
+      displayMath: [['\\[', '\\]']]
+    }
+  };
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="course-line">CS 184</div>
+      <h1 class="title">Homework 3: PathTracer</h1>
+      <div class="byline">by Ellie Ghazaleh and Johanna Liu</div>
+
+      <div class="meta">
+        <div><span class="meta-label">Term:</span> Spring 2026</div>
+        <div><span class="meta-label">Repo:</span> hw3-pathtracer-insomniac</div>
+		<div><span class="meta-label">Link to webpage:</span> <a href="https://kristaghazaleh.github.io/CS184_hw2/">kristaghazaleh.github.io/CS184_hw3/</a>
+		<div><span class="meta-label">Link to repo:</span> <a href="https://github.com/cal-cs184-student/hw3-pathtracer-insomniac.git">https://github.com/cal-cs184-student/hw3-pathtracer-insomniac</a>
+      </div>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Table of contents">
+    <div class="toc-inner">
+      <div class="toc-title">Contents</div>
+      <a href="#Introduction">Introduction</a>
+      <a href="#Part1">Part 1</a>
+      <a href="#Part2">Part 2</a>
+      <a href="#Part3">Part 3</a>
+      <a href="#Part4">Part 4</a>
+      <a href="#Part5">Part 5</a>
+      <a href="#ExtraCredit">Extra Credit</a>
+    </div>
+  </nav>
+
+  <main class="page">
+
+    <section id="Introduction" class="content">
+      <h2>Introduction and Overview</h2>
+
+      <div class="placeholder">
+			<p>
+				In this project we implement the core components of a Monte Carlo path tracer. We begin by generating camera rays
+				from image-space samples, tracing the rays into the scene, and then computing intersections with geometric primitives.
+				We then accelerate scene traversal by improving the performance with a bounding volume hierarchy.
+				The bounding volume hierarchy reduces the cost of ray traversal effectively improving the rendering of more complicated
+				scenes.
+			</p>
+			
+			<p>
+				We then add direct illumination with diffuse BSDF evaluation and shadow rays, extend the renderer to global
+				illumination with recursive path tracing and Russian Roulette, and finally reduce unnecessary computation through
+				adaptive sampling. Our renderer progresses from normal-shaded debugging output to physically
+				based images with soft indirect lighting, color bleeding, and improved sampling efficiency.
+			</p>
+			
+			<p>
+				From tracking our progress, we see early outputs such as ray-direction
+				and normal shading visualizations to physically based images with soft shadows,
+				indirect light transport, and improved sampling efficiency. One of the main ideas
+				reinforced by this project is that realistic rendering depends not only on geometric correctness,
+				efficient acceleration structures, and careful sampling strategies.
+      </div>
+
+      <div class="subgrid">
+        <div>
+          <h3>Build / Run Notes</h3>
+          <p class="placeholder">
+            We worked on Windows in Visual Studio using the CMake Open Folder workflow in x64-Debug. Dependencies were provided
+            through vcpkg and the CMake toolchain file was configured as <code>C:\vcpkg\scripts\buildsystems\vcpkg.cmake</code>.
+            We built using Build → Build All. We ran <code>pathtracer.exe</code> from the build output directory using command line
+            arguments in <code>launch.vs.json</code>. Since Visual Studio launches from the build folder, relative paths typically
+            need <code>../../../</code> to reach the repository root. We used the <code>-f</code> option to save screenshots directly,
+            along with flags such as <code>-r</code> for resolution, <code>-s</code> for samples per pixel, <code>-l</code> for samples
+            per light, and <code>-m</code> for maximum ray depth.
+          </p>
+
+          <pre class="code"><code># Visual Studio CMake run arguments
+# launch.vs.json
+"args": ["../../../dae/keenan/banana.dae"]
+
+# Common flags used in Homework 3
+# -f  output image filename (windowless mode)
+# -r  width height
+# -s  camera rays / samples per pixel
+# -l  samples per area light
+# -m  max ray depth
+# -t  thread count
+
+# GUI shortcut
+# S   save screenshot
+</code></pre>
+      </div>
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="screenshots/banana_gradient.png" alt="PathTracer sanity check render">
+            <figcaption class="caption">
+              Figure 1. banana.dae sanity check renderer.
+            </figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <div class="divider"></div>
+    </section>
+
+    <section id="Part1" class="content">
+      <h2>Part 1: Ray Generation and Scene Intersection</h2>
+
+      <h3>Ray generation and primitive intersection pipeline</h3>
+      <div class="placeholder">
+        <p>
+          For each pixel, the renderer generates one or more camera rays.
+          We use raytrace_pixel(...) to sample points inside each pixel,
+          rather than using only the pixel center. These samples are first
+          expressed in pixel coordinates and then normalized into image
+          coordinates in \( [0,1] \times [0,1] \). The normalized image
+          coordinates are then passed into Camera::generate_ray(...).
+        </p>
+
+        <p>
+          In the camera ray generation step, the camera is treated as the ray
+          origin in world space. Each image sample is mapped onto a virtual
+          sensor plane in camera space at \( z = -1 \). The horizontal and
+          vertical field of view determine the width and height of this
+          sensor plane. If the half-width and half-height are computed from
+          the tangents of half the corresponding field of view angles, then
+          the camera-space sample point on the sensor plane is
+        </p>
+
+        \[
+          x_{\text{sensor}} = (2x - 1) \cdot \texttt{half_width},
+        \]
+        \[
+          y_{\text{sensor}} = (2y - 1) \cdot \texttt{half_height},
+        \]
+        \[
+          z_{\text{sensor}} = -1.
+        \]
+
+        <p>
+          The ray direction is formed from the camera origin through this
+          sensor-plane point and then normalized. After that, the direction
+          is transformed from camera space into world space using c2w. The
+          ray origin is the camera position pos, and min_t and max_t are
+          initialized using the near and far clip distances so that only
+          valid visible intersections are considered.
+        </p>
+
+        <p>
+          After the ray is created, it is passed into
+          est_radiance_global_illumination(...). In Part 1, this function
+          still returns debug output rather than real lighting. Before
+          primitive intersection is implemented, rays that do not hit any
+          geometry produce a ray-direction visualization. After primitive
+          intersections are implemented, the closest valid hit is used to
+          return normal shading instead.
+        </p>
+
+        <p>
+          For primitive intersection, the ray is tested against scene
+          primitives to determine whether it hits a triangle or a sphere.
+          Every candidate hit must satisfy the interval condition
+        </p>
+
+        \[
+          \texttt{ray.min_t} \le t \le \texttt{ray.max_t}.
+        \]
+
+        <p>
+          If a closer valid hit is found, ray.max_t is updated to that
+          smaller \( t \) value. This causes the renderer to keep the nearest
+          visible intersection instead of a farther one behind it. The full
+          intersect(...) version also stores the hit distance \( t \), the
+          surface normal, the primitive pointer, and the BSDF pointer.
+          Overall, this stage of the pipeline converts image-space samples
+          into rays, applies clipping bounds and closest-hit updates for
+          correct visibility, and determines which visible surface each ray
+          reaches.
+        </p>
+      </div>
+
+      <h3>Triangle intersection algorithm</h3>
+      <div class="placeholder">
+        <p>
+          A triangle is defined by three vertices \( \vec{\mathbf{p}}_1 \),
+          \( \vec{\mathbf{p}}_2 \), and \( \vec{\mathbf{p}}_3 \). From these,
+          we form the edge vectors
+        </p>
+
+        \[
+          \vec{\mathbf{e}}_1 = \vec{\mathbf{p}}_2 - \vec{\mathbf{p}}_1,
+        \]
+        \[
+          \vec{\mathbf{e}}_2 = \vec{\mathbf{p}}_3 - \vec{\mathbf{p}}_1.
+        \]
+
+        <p>
+          We write the ray in parametric form as
+        </p>
+
+        \[
+          \vec{\mathbf{r}}(t) = \vec{\mathbf{o}} + t\vec{\mathbf{d}},
+        \]
+
+        <p>
+          where \( \vec{\mathbf{o}} \) is the ray origin,
+          \( \vec{\mathbf{d}} \) is the ray direction, and \( t \) is a scalar
+          parameter giving the location of the hit along the ray. Since the
+          direction is normalized, \( t \) also corresponds to the distance
+          from the ray origin to the intersection point. The goal of the
+          algorithm is to solve for \( t \) together with the barycentric
+          coordinates of the hit point inside the triangle.
+        </p>
+
+        <p>
+          We implemented triangle intersection using the
+          M&ouml;ller-Trumbore method, which solves the ray-triangle
+          intersection directly without explicitly computing the plane
+          equation first. The method uses cross products and dot products to
+          solve a compact linear system and returns the ray parameter
+          \( t \) together with the barycentric weights \( b_0 \),
+          \( b_1 \), and \( b_2 \).
+        </p>
+
+        <p>
+          The determinant is tested first. If it is very small, or close to
+          zero, then the ray is effectively parallel to the triangle plane or
+          the system is degenerate, so there is no valid hit. When the
+          determinant is nonzero, the algorithm computes \( t \), \( b_1 \),
+          and \( b_2 \), and then sets
+        </p>
+
+        \[
+          b_0 = 1 - b_1 - b_2.
+        \]
+
+        <p>
+          These barycentric coordinates tell us whether the hit lies inside
+          the triangle. A hit is accepted only if all barycentric
+          coordinates are nonnegative. If any of them is negative, then the
+          point lies outside the triangle. The hit is also rejected if
+          \( t &lt; \texttt{ray.min_t} \) or \( t &gt; \texttt{ray.max_t} \).
+        </p>
+
+        <p>
+          We used two related functions. The first, has_intersection(...),
+          checks whether a valid hit exists and updates ray.max_t if one is
+          found. The second, intersect(...), performs the same validity
+          checks and also writes the hit data into the intersection
+          structure.
+        </p>
+
+        <p>
+          Once the barycentric coordinates are known, they can also be used
+          to interpolate the vertex normals. We compute the interpolated
+          normal as
+        </p>
+
+        \[
+          \vec{\mathbf{n}} =
+          b_0\vec{\mathbf{n}}_1 +
+          b_1\vec{\mathbf{n}}_2 +
+          b_2\vec{\mathbf{n}}_3.
+        \]
+
+        <p>
+          This interpolated normal is then normalized before being stored.
+          The use of interpolated normals produces smooth shading across the
+          triangle surface rather than a flat result based on a single
+          constant face normal.
+        </p>
+      </div>
+
+      <h3>Normal-shaded results on small .dae scenes</h3>
+      <div class="placeholder">
+        <p>
+          Our first test scene was CBspheres_lambertian.dae. This render
+          shows triangle and sphere intersection working together in the same
+          scene. The Cornell box walls are triangle-based geometry, while the
+          two interior objects are spheres. This confirms that the renderer
+          can distinguish and intersect multiple primitive types correctly.
+          The sphere colors change smoothly across the surfaces because the
+          output is based on surface normals rather than lighting.
+        </p>
+
+        <p>
+          We also rendered cow.dae as a more detailed mesh test. This
+          verifies that our triangle intersection algorithm still works
+          correctly on a higher-polygon model, making it a stronger test than
+          a simple primitive scene. The smooth color transitions indicate
+          that the nearest visible triangle hit is being detected correctly
+          and that the normal information is being applied accurately. The
+          silhouette and body shape also appear correct, which supports that
+          the triangle intersection logic is functioning properly on the
+          mesh.
+        </p>
+
+        <p>
+          Next, we rendered teapot.dae. This gave another triangle-mesh test
+          with more curved and narrow features, especially around the handle
+          and the spout. Rendering the teapot correctly shows that our
+          triangle intersection implementation can handle a wider variety of
+          shapes and silhouettes. The color gradients across the surface
+          reflect normal direction rather than physical lighting.
+        </p>
+
+        <p>
+          Finally, we rendered cube.dae as a simple geometric sanity check
+          for triangle meshes. Because the shape is so simple, it is easy to
+          visually confirm that the visible front-facing surfaces are being
+          hit correctly. The smooth normal-based coloration across the face
+          further confirms that normal shading is being returned from the
+          intersection result as expected.
+        </p>
+
+        <p>
+          Taken together, these four scenes show that Part 1 correctly
+          generates camera rays, intersects both triangles and spheres, keeps
+          the nearest valid hit, and returns normal-based debug shading from
+          the recorded intersection.
+        </p>
+      </div>
+
+      <div class="twocol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="screenshots/spheres_1.png"
+                 alt="Normal shading on CBspheres lambertian">
+            <figcaption class="caption">
+              Figure 2. Normal shading result for CBspheres_lambertian.dae.
+            </figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="screenshots/cow_1.png"
+                 alt="Normal shading on cow">
+            <figcaption class="caption">
+              Figure 3. Normal shading result for cow.dae.
+            </figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="screenshots/teapot_1.png"
+                 alt="Normal shading on teapot">
+            <figcaption class="caption">
+              Figure 4. Normal shading result for teapot.dae.
+            </figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="screenshots/cube_1.png"
+                 alt="Normal shading on cube">
+            <figcaption class="caption">
+              Figure 5. Normal shading result for cube.dae.
+            </figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <div class="divider"></div>
+    </section>
+
+
+<section id="Part2" class="content">
+      <h2>Part 2: Bounding Volume Hierarchy</h2>
+
+		<div class="placeholder">
+		  <p>
+			We added bounding volume acceleration to reduce the cost of ray-scene
+			intersection on our .dae scenes, making it possible to render more
+			complex geometry efficiently. Our implementation was built from three
+			main pieces: the bounding volume hierarchy defined in construct_bvh,
+			ray-bounding-box intersection in BBox::intersect, and BVH traversal in
+			has_intersection and intersect. After completing the full algorithm,
+			rays no longer tested against nearly every primitive in the scene.
+			Instead, they first tested against bounding boxes and only descended
+			into relevant subtrees of the BVH.
+		  </p>
+		</div>
+
+		<h3>Task 0: Rendering Time Comparison Before and After BVH Acceleration</h3>
+
+		<div class="placeholder">
+		  <p>
+			To measure the effect of BVH acceleration, we compared rendering times
+			on several moderately complex scenes before and after implementing BVH
+			traversal. Our baseline measurements were taken when the renderer still
+			behaved like a brute-force primitive traversal, since it did not yet
+			use the existing BVH hierarchy to reject large groups of primitives.
+			After completing BVH traversal, rays were able to discard many
+			primitives through bounding-box tests instead of checking nearly every
+			primitive individually.
+		  </p>
+		</div>
+
+		<div class="placeholder">
+		  <table style="width: 100%; border-collapse: collapse;">
+			<thead>
+			  <tr>
+				<th style="text-align: left; border-bottom: 1px solid #d6d6d6;
+						   padding: 6px 8px;">
+				  Scene
+				</th>
+				<th style="text-align: left; border-bottom: 1px solid #d6d6d6;
+						   padding: 6px 8px;">
+				  Before BVH Traversal (s)
+				</th>
+				<th style="text-align: left; border-bottom: 1px solid #d6d6d6;
+						   padding: 6px 8px;">
+				  After BVH Traversal (s)
+				</th>
+			  </tr>
+			</thead>
+			<tbody>
+			  <tr>
+				<td style="padding: 6px 8px;">cow.dae</td>
+				<td style="padding: 6px 8px;">68.1290</td>
+				<td style="padding: 6px 8px;">2.3490</td>
+			  </tr>
+			  <tr>
+				<td style="padding: 6px 8px;">teapot.dae</td>
+				<td style="padding: 6px 8px;">24.7266</td>
+				<td style="padding: 6px 8px;">1.8537</td>
+			  </tr>
+			  <tr>
+				<td style="padding: 6px 8px;">beetle.dae</td>
+				<td style="padding: 6px 8px;">95.1741</td>
+				<td style="padding: 6px 8px;">1.2052</td>
+			  </tr>
+			</tbody>
+		  </table>
+		</div>
+
+		<div class="placeholder">
+		  <p>
+			Comparing the before and after results shows that BVH acceleration
+			reduced render times dramatically. Scenes that originally took tens of
+			seconds to more than a minute were reduced to only a few seconds after
+			traversal was implemented. This improvement came from the fact that the
+			completed BVH no longer forced each ray to test against almost every
+			primitive. For example, the average primitive intersection tests per
+			ray dropped from 5385.747256 to 3.552941 on cow.dae, from 2285.509974
+			to 2.660212 on teapot.dae, and from 7093.339997 to 1.841978 on
+			beetle.dae. The speedup therefore came from spatial pruning in the BVH
+			rather than any change to camera generation or shading.
+		  </p>
+		</div>
+
+		<h3>BVH Construction Algorithm and Splitting Heuristic</h3>
+
+		<div class="placeholder">
+		  <p>
+			We constructed the BVH recursively over a contiguous iterator range of
+			scene primitives. For each recursive call, we first computed a
+			bounding box that enclosed every primitive in the current range. This
+			bounding box became the bounding box stored in the current BVH node.
+			Our input iterator range [start, end) together with the variable
+			max_leaf_size defined the limits of the primitive subset for that call.
+			After the enclosing box was built, we created a BVHNode using that
+			bounding box and set
+		  </p>
+
+		  \[
+			n = end - start.
+		  \]
+
+		  <p>
+			If
+		  </p>
+
+		  \[
+			n \le \text{max_leaf_size},
+		  \]
+
+		  <p>
+			the node became a leaf and stored start and end directly. Otherwise,
+			we computed the centroid of each primitive bounding box and then
+			computed centroid bounds along each axis:
+		  </p>
+
+		  \[
+			\min_x,\ \max_x,\ \min_y,\ \max_y,\ \min_z,\ \max_z.
+		  \]
+
+		  <p>
+			From these values we computed the centroid extents
+		  </p>
+
+		  \[
+			\text{extent}_x = \max_x - \min_x,
+		  \]
+		  \[
+			\text{extent}_y = \max_y - \min_y,
+		  \]
+		  \[
+			\text{extent}_z = \max_z - \min_z.
+		  \]
+
+		  <p>
+			Our split heuristic chose the axis with the largest centroid extent.
+			After choosing that axis, we split at the midpoint of the centroid
+			interval on that axis:
+		  </p>
+
+		  \[
+			\text{split} =
+			\frac{\min_{\text{axis}} + \max_{\text{axis}}}{2}.
+		  \]
+
+		  <p>
+			The primitives were then partitioned into left and right subsets
+			according to whether their centroids lay to the left or right of this
+			split. This produced child nodes that were spatially more compact than
+			one large leaf node, which improved pruning during traversal.
+		  </p>
+
+		  <p>
+			We also handled the degenerate case where all primitives fall on one
+			side of the midpoint. In that case, we fell back to a median split
+			using std::nth_element. This guaranteed progress in the recursion and
+			prevented the BVH from getting stuck with an invalid one-sided
+			partition. After the split was determined, we recursively built the
+			left and right child nodes. Primitive centroids served as the scalar
+			positions for splitting, and choosing the axis with the largest
+			centroid extent gave a simple and inexpensive way to produce a more
+			balanced tree than splitting along an arbitrary axis.
+		  </p>
+		</div>
+
+		<h3>Ray-Bounding-Box Intersection and BVH Traversal</h3>
+
+		<div class="placeholder">
+		  <p>
+			After constructing the BVH, we implemented ray-bounding-box
+			intersection using the slab method. Since the bounding boxes are
+			axis-aligned, the ray can be tested independently against the x, y,
+			and z slabs. For each axis \(i\), we computed
+		  </p>
+
+		  \[
+			\text{invD} = \frac{1}{r.d[i]},
+		  \]
+		  \[
+			t_{\text{near}} = (\min[i] - r.o[i]) \cdot \text{invD},
+		  \]
+		  \[
+			t_{\text{far}} = (\max[i] - r.o[i]) \cdot \text{invD}.
+		  \]
+
+		  <p>
+			If
+		  </p>
+
+		  \[
+			t_{\text{near}} > t_{\text{far}},
+		  \]
+		  
+
+		  <p>
+			the two values were swapped. We then maintained a valid intersection
+			interval \([t_0, t_1]\) using
+		  </p>
+
+		  \[
+			t_0 = \max(t_0, t_{\text{near}}),
+		  \]
+		  \[
+			t_1 = \min(t_1, t_{\text{far}}).
+		  \]
+
+		  <p>
+			If
+
+		  \[
+			t_0 > t_1,
+		  \]
+		    </p>
+
+		  <p>
+			the ray missed the box. Otherwise, the final interval \([t_0, t_1]\)
+			represented the portion of the ray inside the bounding box.
+		  </p>
+
+		  <p>
+			During BVH traversal, each ray was first tested against the bounding
+			box of the current node. If the ray missed that box, the entire
+			subtree could be skipped immediately. If the ray hit the box, the
+			traversal continued into the children, or, in the case of a leaf node,
+			into the small set of primitives stored in that leaf. In
+			has_intersection, traversal returned as soon as any valid hit was
+			found. In intersect, traversal could not short-circuit in the same
+			way, because it had to preserve the nearest valid hit. This is what
+			made the BVH effective: bounding-box rejection avoided many expensive
+			primitive intersection tests and limited primitive checks to only a
+			small number of relevant leaves.
+		  </p>
+		</div>
+
+		<h3>Normal-Shaded Images for Large .dae Files Rendered with BVH Acceleration</h3>
+
+		<div class="placeholder">
+		  <p>
+			To demonstrate that BVH acceleration makes larger scenes practical to
+			render, we generated normal-shaded images for three more detailed .dae
+			scenes: bunny, dragon, and wall-e. These scenes contain much more
+			geometry than the smaller Part 1 test scenes, so they are stronger
+			demonstrations of why BVH acceleration matters. In each case, the
+			output preserves the full model silhouette and shows the expected
+			normal-based color variation across the surface.
+		  </p>
+
+		  <p>
+			The bunny image shows smooth normal variation across rounded organic
+			forms such as the body and ears. The dragon scene contains a much more
+			detailed silhouette with thin protrusions and curved surface regions,
+			so it demonstrates that the BVH remains effective on denser geometry.
+			The wall-e scene adds a more mechanical shape profile with flatter
+			faces and sharper transitions, showing that the implementation works on
+			both curved organic surfaces and more rigid geometric structures.
+		  </p>
+		</div>
+
+		<div class="threecol">
+		  <figure class="figure">
+			<div class="figure-box">
+			  <img src="screenshots/bunny.png"
+				   alt="Normal shading result for bunny">
+			  <figcaption class="caption">
+				Figure 6. Normal-shaded render of bunny.dae.
+			  </figcaption>
+			</div>
+		  </figure>
+
+		  <figure class="figure">
+			<div class="figure-box">
+			  <img src="screenshots/dragon.png"
+				   alt="Normal shading result for dragon">
+			  <figcaption class="caption">
+				Figure 7. Normal-shaded render of dragon.dae.
+			  </figcaption>
+			</div>
+		  </figure>
+
+		  <figure class="figure">
+			<div class="figure-box">
+			  <img src="screenshots/wall-e.png"
+				   alt="Normal shading result for wall-e">
+			  <figcaption class="caption">
+				Figure 8. Normal-shaded render of wall-e.dae.
+			  </figcaption>
+			</div>
+		  </figure>
+		</div>
+
+      <div class="divider"></div>
+    </section>
+
+
+    <section id="Part3" class="content">
+      <h2>Part 3: Direct Illumination</h2>
+
+		<h3>Implementation Overview</h3>
+		<div class="placeholder">
+		  <p>
+			In Part 3, we moved from normal-shaded debugging output to direct illumination by
+			uniform hemisphere sampling and importance sampling of scene lights. Our path tracer
+			interface includes estimate_direct_lighting_hemisphere, estimate_direct_lighting_importance,
+			zero_bounce_radiance, one_bounce_radiance, and est_radiance_global_illumination. The final
+			radiance value is the sum of emitted radiance from the directly hit surface and one-bounce
+			direct illumination from visible light sources. The current integration path adds
+			zero_bounce_radiance and one_bounce_radiance inside est_radiance_global_illumination.
+			This structure was created first without recursive indirect transport, which is added later
+			through at_least_one_bounce_radiance.
+		  </p>
+
+		  <p>
+			Our diffuse material model is Lambertian. The Lambertian bidirectional scattering distribution
+			function is constant with respect to direction and equals albedo divided by \( \pi \).
+			We implemented DiffuseBSDF::f to return reflectance / PI, where reflectance represents the
+			stored diffuse albedo. The direct-lighting integrand uses the relationship
+			\( f(\omega_o, \omega_i)L_i(\omega_i)\cos\theta \), where
+			\( f(\omega_o, \omega_i) = \rho / \pi \). The bidirectional scattering distribution
+			function term controls how much incoming light is reflected. The cosine term accounts for
+			foreshortening relative to the surface normal. The isotropic nature of Lambertian reflection
+			means that the bidirectional scattering distribution function value is not directionally dependent.
+		  </p>
+		</div>
+
+		<h3>Zero-bounce Illumination</h3>
+		<div class="placeholder">
+		  <p>
+			During zero-bounce illumination, radiance is emitted from the surface directly hit by the ray.
+			Our zero_bounce_radiance method returns isect.bsdf->get_emission(), where the emitted-radiance
+			term is the \( L_e \) term in the rendering equation. Light sources become visible immediately
+			through this term before direct reflection accumulates from other surfaces. In this case,
+			non-emissive diffuse surfaces do not contribute visible light from zero-bounce illumination alone.
+		  </p>
+		</div>
+
+		<h3>Uniform Hemisphere Sampling</h3>
+		<div class="placeholder">
+		  <p>
+			The hemisphere estimator samples incoming directions uniformly over the hemisphere above the
+			surface. A local shading coordinate frame is built by aligning the surface normal with the
+			local positive z-axis using make_coord_space. A world-to-local transform and a local-to-world
+			transform are both used in the direct-lighting paths. The outgoing direction is the negated
+			ray direction transformed into local coordinates,
+			\( \omega_o = w2o \cdot (-r.d) \), and the hit point follows the standard ray equation
+			\( p = r.o + t r.d \), where \( r \) is the ray, \( r.o \) is its origin, \( r.d \) is
+			its direction, and \( t \) is the intersection distance. Each Monte Carlo sample draws a
+			direction \( \omega_i \) uniformly from the local hemisphere. The sampled direction vector
+			is transformed back into world space to build a shadow ray, which starts at the hit point
+			and uses min_t = EPS_F to avoid self-intersection. The direct-lighting code uses this epsilon
+			offset to test visibility, and a sample contributes only when the shadow ray hits an emissive
+			surface.
+		  </p>
+
+		  <p>
+			The uniform hemisphere probability density function is
+			\( p(\omega_i) = \frac{1}{2\pi} \), and the estimator takes the form
+		  </p>
+
+		  <p>
+			\[
+			L_o \approx \frac{1}{N}\sum_{k=1}^{N}
+			\frac{f(\omega_o,\omega_i^{k})L_i(\omega_i^{k})\cos\theta^{k}}
+			{p(\omega_i^{k})}.
+			\]
+		  </p>
+
+		  <p>
+			The cosine term is the magnitude of the local z-component, corresponding to
+			abs_cos_theta. This estimator is unbiased, but its variance is high when the light occupies
+			only a small region of the hemisphere. Most samples miss the actual light source, which
+			produces many zero-contribution terms. The visible consequence is strong speckling across the
+			floor, walls, and mesh.
+		  </p>
+		</div>
+
+		<h3>Importance Sampling of Lights</h3>
+		<div class="placeholder">
+		  <p>
+			The importance-sampled estimator draws samples from the scene lights instead of from arbitrary
+			hemisphere directions. Our implementation loops over scene->lights, which is the scene-light
+			collection used by the path tracer. For each light, sample_L(hit_p, &amp;wi, &amp;dist_to_light,
+			&amp;pdf) returns incoming radiance, a sampled world-space direction, the distance to the
+			sampled light point, and the light-sampling probability density function. The sampled
+			world-space direction is converted into local space before evaluating the diffuse bidirectional
+			scattering distribution function and cosine factor. We use the local z test
+			\( \omega_i.z \leq 0 \) to discard samples from below the hemisphere.
+		  </p>
+
+		  <p>
+			The visibility test uses a shadow ray toward the sampled light direction with
+			min_t = EPS_F and max_t = dist_to_light - EPS_F so the occlusion test stops just short of the
+			sampled light point. Unoccluded samples contribute according to
+		  </p>
+
+		  <p>
+			\[
+			\frac{f(\omega_o,\omega_i)L_i(\omega_i)\cos\theta}{p(\omega_i)}.
+			\]
+		  </p>
+
+		  <p>
+			Delta lights use one sample, while area lights use ns_area_light samples and average the
+			result over those samples. This follows the branch
+			light->is_delta_light() ? 1 : ns_area_light. The integrand is unchanged, but the proposal
+			distribution is different and is concentrated on actual light sources. As a result, the
+			estimator spends far fewer samples on zero-contribution directions than uniform hemisphere
+			sampling. The visible consequence is much lower variance for the same sample budget, which is
+			especially noticeable on the back wall and in the soft shadow under the mesh.
+		  </p>
+		</div>
+
+		<h3>One-bounce Direct-light Integration</h3>
+		<div class="placeholder">
+		  <p>
+			The one_bounce_radiance function acts as a switch between the two direct-lighting estimators.
+			The code chooses hemisphere sampling when direct_hemisphere_sample is true and otherwise uses
+			importance sampling. This switch makes it possible to render the same scene in two matched
+			modes by changing the -H flag. Zero-bounce emission and one-bounce direct lighting are added
+			in est_radiance_global_illumination through the sum
+			\( L = L_{\text{zero-bounce}} + L_{\text{one-bounce}} \).
+		  </p>
+		</div>
+
+		<div class="twocol">
+		  <figure class="figure">
+			<div class="figure-box">
+			  <img src="screenshots/CBbunny_hemisphere_s16_l8.png"
+				   alt="CBbunny rendered with uniform hemisphere sampling">
+			  <figcaption class="caption">
+				Figure 9. CBbunny direct lighting using uniform hemisphere sampling
+				with -s 16, -l 8, and -H.
+			  </figcaption>
+			</div>
+		  </figure>
+
+		  <figure class="figure">
+			<div class="figure-box">
+			  <img src="screenshots/CBbunny_importance_s16_l8.png"
+				   alt="CBbunny rendered with importance sampling of lights">
+			  <figcaption class="caption">
+				Figure 10. CBbunny direct lighting using importance sampling of
+				lights with -s 16 and -l 8.
+			  </figcaption>
+			</div>
+		  </figure>
+		</div>
+
+		<h3>Rendered Comparison of the Two Direct-lighting Estimators</h3>
+		<div class="placeholder">
+		  <p>
+			Both images use the same Cornell Box scene, the same camera, the same bunny mesh,
+			and the same overall sampling budget, so the visible difference comes from the
+			estimator rather than from geometry or material changes.
+		  </p>
+
+		  <p>
+			<strong>Hemisphere Image CBbunny_hemisphere_s16_l8:</strong> The direct illumination is
+			present, but the image is extremely noisy with dense speckling on the back wall. The body of
+			the mesh has rough granular shading and lacks smooth tonal transitions. The floor and shadow
+			regions also contain scattered bright and dark noise. Although the light source is visible,
+			most non-light pixels converge slowly. The estimator quality is limited by the mismatch between
+			uniform hemisphere sampling and the relatively small ceiling area light.
+		  </p>
+
+		  <p>
+			<strong>Importance Image CBbunny_importance_s16_l8:</strong> The scene and general settings
+			remain the same, but the direct-light samples are drawn from the light sources. This produces
+			a smoother and clearer form on the back wall, and the mesh renders more clearly in detailed
+			regions such as the ears and head. The contact shadow and soft shadow under the mesh are less
+			speckled, and the walls converge more cleanly. The noise reduction comes from lower variance,
+			with the difference arising from estimator efficiency despite the same sampling budget.
+		  </p>
+		</div>
+
+		<div class="twocol">
+		  <figure class="figure">
+			<div class="figure-box">
+			  <img src="screenshots/CBbunny_lightsampling_s1_l1.png"
+				   alt="CBbunny light sampling with one light ray">
+			  <figcaption class="caption">
+				Figure 11. Light sampling on CBbunny with -s 1 and -l 1.
+			  </figcaption>
+			</div>
+		  </figure>
+
+		  <figure class="figure">
+			<div class="figure-box">
+			  <img src="screenshots/CBbunny_lightsampling_s1_l4.png"
+				   alt="CBbunny light sampling with four light rays">
+			  <figcaption class="caption">
+				Figure 12. Light sampling on CBbunny with -s 1 and -l 4.
+			  </figcaption>
+			</div>
+		  </figure>
+
+		  <figure class="figure">
+			<div class="figure-box">
+			  <img src="screenshots/CBbunny_lightsampling_s1_l16.png"
+				   alt="CBbunny light sampling with sixteen light rays">
+			  <figcaption class="caption">
+				Figure 13. Light sampling on CBbunny with -s 1 and -l 16.
+			  </figcaption>
+			</div>
+		  </figure>
+
+		  <figure class="figure">
+			<div class="figure-box">
+			  <img src="screenshots/CBbunny_lightsampling_s1_l64.png"
+				   alt="CBbunny light sampling with sixty-four light rays">
+			  <figcaption class="caption">
+				Figure 14. Light sampling on CBbunny with -s 1 and -l 64.
+			  </figcaption>
+			</div>
+		  </figure>
+		</div>
+
+		<h3>Four-image Light Sampling Sequence: s = 1, Varying l</h3>
+		<div class="placeholder">
+		  <p>
+			<strong>CBbunny_lightsampling_s1_l1:</strong> This image has the highest noise
+			level, and the soft shadow under the mesh is unstable and speckled. The back
+			wall and the floor show strong Monte Carlo grain. The edges are very fuzzy, and
+			a single light sample per pixel gives the poorest estimate for the area-light integral.
+		  </p>
+
+		  <p>
+			<strong>CBbunny_lightsampling_s1_l4:</strong> This image shows visible clarity,
+			and the noise reduction is immediate relative to l = 1. The shadow region stabilizes,
+			and the back wall becomes less harshly grainy. The silhouette of the mesh also becomes
+			clearer and smoother. Increasing the number of light samples makes it possible to average
+			the area-light contribution more effectively than in the single-sample case.
+		  </p>
+
+		  <p>
+			<strong>CBbunny_lightsampling_s1_l16:</strong> At this quality level, the shadow
+			structure becomes much easier to read, with smoother transitions on the back wall and in
+			the shadow region. Noise on the floor drops further, and shading across the mesh becomes
+			less grainy across both small and broad surface features. The variance reduction is strong
+			compared with the previous two images.
+		  </p>
+
+		  <p>
+			<strong>CBbunny_lightsampling_s1_l64:</strong> At 64 light rays, the quality is the
+			highest of the four images. The shadow is much smoother and more stable, and noise along
+			the walls and floor is reduced substantially. The improvements are more incremental at this
+			sample count, so diminishing returns are visible even though the image quality is the best
+			in the sequence.
+		  </p>
+
+		  <p>
+			The only parameter changed in this sequence was the number of samples per light.
+			The shadow regions were the most visually informative because area-light shadows contain
+			a penumbra that must be integrated over an extended source. More light samples average more
+			independent measurements of the same direct-light contribution, so variance decreases as the
+			number of light samples increases. The improvement is strongest from very low sample counts
+			to moderate sample counts, with diminishing returns as the count becomes large.
+		  </p>
+
+		  <p>
+			The outgoing radiance from direct lighting is estimated from Lambertian diffuse reflection
+			through the integral
+		  </p>
+
+		  <p>
+			\[
+			L_o(\omega_o) = \int_{\mathcal{H}^2}
+			f(\omega_o,\omega_i)L_i(\omega_i)\cos\theta_i\,d\omega_i.
+			\]
+		  </p>
+
+		  <p>
+			For Lambertian diffuse reflection,
+			\( f(\omega_o,\omega_i) = \rho / \pi \), where \( \rho \) is the diffuse reflectance,
+			albedo, or color. A larger value of \( \rho \) corresponds to a brighter diffuse surface.
+			Light sampling uses the probability density function returned by the light sampler, and the
+			cosine term is the dot product with the surface normal. In local coordinates, this corresponds
+			to the magnitude of the z-component. Visibility is enforced through the shadow-ray intersection
+			test, and zero-bounce emission contributes the \( L_e \) term directly at the surface hit.
+		  </p>
+		</div>
+
+		<div class="divider"></div>
+    </section>
+
+    <section id="Part4" class="content">
+      <h2>Part 4: Global Illumination</h2>
+
+      <h3>Implementation of Recursive Indirect Lighting</h3>
+      <div class="placeholder">
+        <p>
+          In Part 4 we extended the renderer from direct illumination to full global
+          illumination by adding recursive path tracing. The final radiance for a
+          camera ray is the sum of zero-bounce emission and the radiance returned by
+          at_least_one_bounce_radiance. Zero-bounce radiance accounts for light
+          emitted directly by a surface. The recursive routine then adds one-bounce
+          direct lighting and estimates higher-order transport by sampling one BSDF
+          direction and tracing a new ray.
+        </p>
+
+        <p>
+          At each hit point we build a local shading frame with the surface normal
+          aligned to the positive z-axis. The outgoing direction is the negated ray
+          direction transformed into this local frame. We then sample an incoming
+          direction from the diffuse BSDF using sample_f, transform the sampled
+          direction back into world space, offset the new ray origin by EPS_F to
+          avoid self-intersection, decrease the ray depth by one, and recursively
+          evaluate the bounced ray. This is the step that allows light to move from
+          one diffuse surface to another and produce soft fill light, shadow lifting,
+          and color bleeding throughout the Cornell box.
+        </p>
+
+        <p>
+          Our diffuse material model is Lambertian, so the BSDF is
+        </p>
+
+        \[
+          f(\omega_o, \omega_i) = \frac{\rho}{\pi},
+        \]
+
+        <p>
+          where \( \rho \) is the diffuse reflectance. The rendering equation at a
+          surface point is
+        </p>
+
+        \[
+          L_o(\omega_o) = L_e(\omega_o) +
+          \int_{\mathcal{H}^2} f(\omega_o, \omega_i)
+          L_i(\omega_i) \cos\theta_i \, d\omega_i.
+        \]
+
+        <p>
+          The Monte Carlo estimate for one sampled indirect direction is
+        </p>
+
+        \[
+          \widehat{L}_{\text{indirect}} =
+          \frac{f(\omega_o, \omega_i) L_i(\omega_i)
+          \lvert \cos\theta_i \rvert}{p(\omega_i)}.
+        \]
+
+        <p>
+          Because the diffuse sampler is cosine-weighted, the ideal probability
+          density is
+        </p>
+
+        \[
+          p(\omega_i) = \frac{\cos\theta_i}{\pi}.
+        \]
+
+        <p>
+          Substituting the Lambertian BSDF into the estimator gives
+        </p>
+
+        \[
+          \frac{(\rho / \pi) \cos\theta_i}{\cos\theta_i / \pi} = \rho.
+        \]
+
+        <p>
+          This cancellation explains why cosine-weighted sampling is a natural match
+          for diffuse transport. The cosine term from the rendering equation is built
+          into the proposal distribution, which reduces variance compared with
+          sampling the hemisphere uniformly.
+        </p>
+
+        <p>
+          We used two Part 4 viewing modes. In accumulated mode, each visible hit
+          returns direct lighting and also includes the recursively estimated
+          contribution from deeper bounces. In unaccumulated mode, the image isolates
+          a single bounce depth instead of summing all lower-order terms. This makes
+          it possible to visualize what the second bounce, third bounce, and later
+          bounces contribute individually.
+        </p>
+
+        <p>
+          We also used Russian Roulette to terminate long paths probabilistically.
+          After a valid bounce, the path continues with probability \( p_{rr} = 0.4 \).
+          If the path survives, its contribution is divided by that same continuation
+          probability, which gives the estimator
+        </p>
+
+        \[
+          \widehat{L}_{\text{rr}} =
+          \frac{f(\omega_o, \omega_i) L_i(\omega_i)
+          \lvert \cos\theta_i \rvert}{p(\omega_i) p_{rr}}.
+        \]
+
+        <p>
+          This keeps the expected value unchanged while reducing the average path
+          length. In practice, the visually important energy comes from the first few
+          bounces, while higher-order bounces are weaker and can be sampled
+          probabilistically without noticeably changing the final image at the same
+          sample budget.
+        </p>
+      </div>
+
+      <h3>Global Illumination Examples</h3>
+      <div class="placeholder">
+        <p>
+          The following renders show full global illumination with both direct and
+          indirect lighting enabled at 1024 samples per pixel. The bunny scene is the
+          main reference scene for Part 4, and the Lambertian spheres scene provides
+          a second view where tonal gradients are especially easy to read. In both
+          images, shadowed regions remain visible because light reaches them through
+          multiple diffuse paths rather than only from the ceiling emitter.
+        </p>
+
+        <p>
+          These images show the main visual signatures of global illumination. The
+          first is soft indirect fill in regions that do not have a direct line of
+          sight to the light. The second is color bleeding from the red and blue
+          Cornell box walls into nearby neutral surfaces. The third is a more natural
+          global balance of brightness, since energy is redistributed throughout the
+          scene instead of being concentrated only where direct lighting is strongest.
+        </p>
+      </div>
+
+      <div class="twocol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_A01_fullGI_CBbunny_1024spp_4l_m5.png" alt="Full global illumination on CBbunny at 1024 samples per pixel">
+            <figcaption class="caption">
+              Figure 15. Full global illumination on CBbunny with 1024 samples per pixel, 4 light rays, and maximum ray depth 5.
+            </figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_A02_fullGI_CBspheresLambertian_1024spp_4l_m5.png" alt="Full global illumination on CBspheres lambertian at 1024 samples per pixel">
+            <figcaption class="caption">
+              Figure 16. Full global illumination on CBspheres_lambertian with 1024 samples per pixel, 4 light rays, and maximum ray depth 5.
+            </figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <h3>Direct-only versus Indirect-only Lighting</h3>
+      <div class="placeholder">
+        <p>
+          These two images separate the two major components of the rendering
+          equation. The direct-only image contains the one-bounce lighting term from
+          the area light. It has stronger local contrast, darker shadow regions, and
+          sharper transitions because only directly visible illumination is present.
+          The indirect-only image suppresses the top-level direct term while keeping
+          bounced transport active, so the bunny and box remain visible but the
+          result becomes softer, dimmer, and more spatially uniform.
+        </p>
+
+        <p>
+          This comparison makes it easier to explain what each term contributes.
+          Direct illumination is responsible for the strongest local structure and
+          makes the object immediately readable. Indirect illumination is responsible
+          for soft fill light, lifted shadows, and wall-color transfer. In the
+          indirect-only image, the red wall warms the left side of the bunny and
+          floor, while the blue wall cools the right side. That color bleeding is one
+          of the clearest visual indicators that the path tracer is solving nonlocal
+          light transport rather than a purely local shading model.
+        </p>
+      </div>
+
+      <div class="twocol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_B01_CBbunny_directOnly_1024spp_4l_m5.png" alt="Direct-only lighting on CBbunny">
+            <figcaption class="caption">
+              Figure 17. CBbunny rendered with only direct illumination.
+            </figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_B02_CBbunny_indirectOnly_1024spp_4l_m5.png" alt="Indirect-only lighting on CBbunny">
+            <figcaption class="caption">
+              Figure 18. CBbunny rendered with only indirect illumination.
+            </figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <h3>CBbunny Unaccumulated Bounce Sequence</h3>
+      <div class="placeholder">
+        <p>
+          The next six images isolate the contribution of a single bounce depth at a
+          time. Bounce depth 0 contains only zero-bounce emission, so the ceiling
+          light is visible while the rest of the Cornell box remains black. Bounce
+          depth 1 corresponds to the direct-light term, which makes the bunny and box
+          visible but still leaves the scene comparatively harsh and contrasty.
+        </p>
+
+        <p>
+          Bounce depth 2 is the most important frame in this sequence. It shows the
+          second bounce by itself, which is the first strong indirect contribution.
+          This is where the image brightens noticeably in regions that were dark in
+          the direct-only view, and it is where color bleeding becomes much easier to
+          see. Compared with rasterization, which naturally handles direct visibility
+          and local shading but not diffuse interreflection, this second-bounce
+          contribution is one of the main reasons path tracing looks more realistic.
+        </p>
+
+        <p>
+          Bounce depth 3 is weaker than bounce depth 2 because each diffuse
+          reflection loses energy through the Lambertian factor and the cosine term.
+          At the same time, the light becomes more uniform because repeated diffuse
+          reflections blur away directional structure. The third bounce therefore
+          looks dimmer and more ambient. The fourth and fifth bounces continue the
+          same trend. They are progressively weaker, smoother, and lower-frequency,
+          which is why they look more like subtle global fill than a dominant light
+          source.
+        </p>
+      </div>
+
+      <div class="threecol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_C00_CBbunny_unaccum_m0_1024spp_4l.png" alt="CBbunny unaccumulated bounce depth 0">
+            <figcaption class="caption">Figure 19. CBbunny unaccumulated bounce depth 0.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_C01_CBbunny_unaccum_m1_1024spp_4l.png" alt="CBbunny unaccumulated bounce depth 1">
+            <figcaption class="caption">Figure 20. CBbunny unaccumulated bounce depth 1.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_C02_CBbunny_unaccum_m2_1024spp_4l.png" alt="CBbunny unaccumulated bounce depth 2">
+            <figcaption class="caption">Figure 21. CBbunny unaccumulated bounce depth 2.</figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <div class="threecol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_C03_CBbunny_unaccum_m3_1024spp_4l.png" alt="CBbunny unaccumulated bounce depth 3">
+            <figcaption class="caption">Figure 22. CBbunny unaccumulated bounce depth 3.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_C04_CBbunny_unaccum_m4_1024spp_4l.png" alt="CBbunny unaccumulated bounce depth 4">
+            <figcaption class="caption">Figure 23. CBbunny unaccumulated bounce depth 4.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_C05_CBbunny_unaccum_m5_1024spp_4l.png" alt="CBbunny unaccumulated bounce depth 5">
+            <figcaption class="caption">Figure 24. CBbunny unaccumulated bounce depth 5.</figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <h3>CBbunny Accumulated Bounce Sequence</h3>
+      <div class="placeholder">
+        <p>
+          In accumulated mode, each image contains all contributions up to the
+          selected maximum ray depth. Bounce depth 0 again shows only the emissive
+          light source. Bounce depth 1 adds direct lighting and therefore resembles
+          the direct-only render. Once the maximum depth reaches 2 and 3, the image
+          improves substantially. Shadowed regions brighten, the bunny separates more
+          clearly from the floor and back wall, and the red and blue wall colors
+          bleed into nearby neutral surfaces.
+        </p>
+
+        <p>
+          The differences become smaller at depths 4 and 5 because later diffuse
+          bounces contribute less energy. This is the same diminishing-return pattern
+          seen in the unaccumulated row, but the accumulated sequence makes the
+          convergence behavior easier to see. The unaccumulated images show what each
+          individual bounce contributes. The accumulated images show how the final
+          rendered solution is built up by summing those contributions over depth.
+        </p>
+
+        <p>
+          The most important visual jump is from depth 1 to depth 2. That is the
+          point where the image stops looking like direct illumination alone and
+          starts to read as global illumination. The transition from depth 2 to depth
+          3 is more subtle. It contributes less dramatic new structure and more soft
+          balancing of the scene through higher-order transport.
+        </p>
+      </div>
+
+      <div class="threecol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_D00_CBbunny_accum_m0_1024spp_4l.png" alt="CBbunny accumulated bounce depth 0">
+            <figcaption class="caption">Figure 25. CBbunny accumulated bounce depth 0.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_D01_CBbunny_accum_m1_1024spp_4l.png" alt="CBbunny accumulated bounce depth 1">
+            <figcaption class="caption">Figure 26. CBbunny accumulated bounce depth 1.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_D02_CBbunny_accum_m2_1024spp_4l.png" alt="CBbunny accumulated bounce depth 2">
+            <figcaption class="caption">Figure 27. CBbunny accumulated bounce depth 2.</figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <div class="threecol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_D03_CBbunny_accum_m3_1024spp_4l.png" alt="CBbunny accumulated bounce depth 3">
+            <figcaption class="caption">Figure 28. CBbunny accumulated bounce depth 3.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_D04_CBbunny_accum_m4_1024spp_4l.png" alt="CBbunny accumulated bounce depth 4">
+            <figcaption class="caption">Figure 29. CBbunny accumulated bounce depth 4.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_D05_CBbunny_accum_m5_1024spp_4l.png" alt="CBbunny accumulated bounce depth 5">
+            <figcaption class="caption">Figure 30. CBbunny accumulated bounce depth 5.</figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <h3>CBbunny Russian Roulette</h3>
+      <div class="placeholder">
+        <p>
+          Russian Roulette gives a probabilistic way to terminate long paths without
+          biasing the estimator. The images with maximum depths 0, 1, 2, 3, and 4
+          show the same basic progression seen in the accumulated sequence, but the
+          depth 100 image acts as a deep-path reference. It looks very close to the
+          moderate-depth renders because later diffuse bounces carry much less energy
+          than the first few bounces. Most of the visible structure is already in the
+          image by the time the path length reaches only a few bounces.
+        </p>
+
+        <p>
+          The main advantage of Russian Roulette is efficiency. A hard depth cutoff
+          forces every path to continue until the limit, even when the remaining
+          energy is negligible. Russian Roulette instead terminates many weak paths
+          early and keeps only a subset of them, while scaling surviving paths by the
+          inverse continuation probability. This preserves the expected contribution
+          but reduces the average amount of work per sample.
+        </p>
+      </div>
+
+      <div class="threecol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_E00_CBbunny_russianRoulette_m0_1024spp_4l.png" alt="CBbunny Russian Roulette depth 0">
+            <figcaption class="caption">Figure 31. CBbunny Russian Roulette with maximum depth 0.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_E01_CBbunny_russianRoulette_m1_1024spp_4l.png" alt="CBbunny Russian Roulette depth 1">
+            <figcaption class="caption">Figure 32. CBbunny Russian Roulette with maximum depth 1.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_E02_CBbunny_russianRoulette_m2_1024spp_4l.png" alt="CBbunny Russian Roulette depth 2">
+            <figcaption class="caption">Figure 33. CBbunny Russian Roulette with maximum depth 2.</figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <div class="threecol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_E03_CBbunny_russianRoulette_m3_1024spp_4l.png" alt="CBbunny Russian Roulette depth 3">
+            <figcaption class="caption">Figure 34. CBbunny Russian Roulette with maximum depth 3.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_E04_CBbunny_russianRoulette_m4_1024spp_4l.png" alt="CBbunny Russian Roulette depth 4">
+            <figcaption class="caption">Figure 35. CBbunny Russian Roulette with maximum depth 4.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_E100_CBbunny_russianRoulette_m100_1024spp_4l.png" alt="CBbunny Russian Roulette depth 100">
+            <figcaption class="caption">Figure 36. CBbunny Russian Roulette with maximum depth 100.</figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <h3>Sample-per-pixel Comparison</h3>
+      <div class="placeholder">
+        <p>
+          The final Part 4 comparison holds the scene, bounce settings, and light
+          sampling fixed and varies only the number of camera samples per pixel. At 1,
+          2, and 4 samples per pixel the Monte Carlo estimate has high variance, so
+          the bunny, floor, and walls are dominated by visible grain. At 8 and 16
+          samples per pixel the overall structure becomes much easier to read. At 64
+          samples per pixel the render is already fairly stable, and the jump from 64
+          to 1024 samples per pixel mainly removes the remaining low-amplitude speckle
+          rather than changing the global appearance of the scene.
+        </p>
+
+        <p>
+          This sequence demonstrates the standard Monte Carlo convergence law. If
+          \( N \) is the number of independent samples, then the variance decreases on
+          the order of \( 1 / N \), which means the standard deviation decreases on
+          the order of \( 1 / \sqrt{N} \). Early increases in the sample count produce
+          large visible improvements because the image starts out in a high-variance
+          regime. Later increases still help, but the returns are smaller per added
+          sample, which is why the high-sample images improve more gradually.
+        </p>
+      </div>
+
+      <div class="eightgrid">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_F001_CBbunny_sppComparison_s1_4l_m5.png" alt="CBbunny sample-per-pixel comparison at 1 sample per pixel">
+            <figcaption class="caption">Figure 37. CBbunny at 1 sample per pixel.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_F002_CBbunny_sppComparison_s2_4l_m5.png" alt="CBbunny sample-per-pixel comparison at 2 samples per pixel">
+            <figcaption class="caption">Figure 38. CBbunny at 2 samples per pixel.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_F004_CBbunny_sppComparison_s4_4l_m5.png" alt="CBbunny sample-per-pixel comparison at 4 samples per pixel">
+            <figcaption class="caption">Figure 39. CBbunny at 4 samples per pixel.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_F008_CBbunny_sppComparison_s8_4l_m5.png" alt="CBbunny sample-per-pixel comparison at 8 samples per pixel">
+            <figcaption class="caption">Figure 40. CBbunny at 8 samples per pixel.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_F016_CBbunny_sppComparison_s16_4l_m5.png" alt="CBbunny sample-per-pixel comparison at 16 samples per pixel">
+            <figcaption class="caption">Figure 41. CBbunny at 16 samples per pixel.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_F064_CBbunny_sppComparison_s64_4l_m5.png" alt="CBbunny sample-per-pixel comparison at 64 samples per pixel">
+            <figcaption class="caption">Figure 42. CBbunny at 64 samples per pixel.</figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part4/P4_F1024_CBbunny_sppComparison_s1024_4l_m5.png" alt="CBbunny sample-per-pixel comparison at 1024 samples per pixel">
+            <figcaption class="caption">Figure 43. CBbunny at 1024 samples per pixel.</figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <div class="divider"></div>
+    </section>
+
+
+<section id="Part5" class="content">
+      <h2>Part 5: Adaptive Sampling</h2>
+
+      <h3>Implementation of Adaptive Sampling</h3>
+      <div class="placeholder">
+        <p>
+          Explain the adaptive sampling algorithm and walk through the implementation
+          in pathtracer.cpp. Define the role of samplesPerBatch, maxTolerance,
+          sampleCountBuffer, and the running luminance statistics used for the
+          convergence test. State how many samples are taken before each convergence
+          check and explain how the stopping rule decides whether a pixel has
+          converged.
+        </p>
+
+        <p>
+          Include the confidence-interval test used in the assignment. Define the
+          sample mean luminance, the sample variance estimate, the quantity
+          corresponding to the half-width of the confidence interval, and the
+          convergence condition that compares that interval size against the scaled
+          mean luminance. Explain that pixels with high variance continue receiving
+          more samples, while smooth low-variance pixels terminate earlier.
+        </p>
+
+        <p>
+          Discuss why adaptive sampling concentrates work along difficult regions
+          such as geometric edges, shadow boundaries, and detailed lighting changes.
+          Explain why flat walls and other low-variance regions tend to converge
+          much sooner. This subsection should directly answer the requirement to
+          explain adaptive sampling and describe how the implementation works.
+        </p>
+      </div>
+
+      <h3>Scene 1: Adaptive Sampling Result and Sampling-Rate Visualization</h3>
+      <div class="placeholder">
+        <p>
+          Choose the first scene and report the render settings used for this
+          comparison. State that the render used at least 2048 samples per pixel,
+          1 sample per light, and at least 5 for maximum ray depth. Describe where
+          the sampling-rate image is brightest or darkest and explain what those
+          regions reveal about variance in the scene.
+        </p>
+
+        <p>
+          Compare the final rendered image against the corresponding sampling-rate
+          image. Explain which parts of the image required the most samples and why.
+          Connect the visual pattern in the rate image to edges, shadows, fine
+          geometric structure, or other difficult regions in the final render.
+        </p>
+      </div>
+
+      <div class="twocol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="screenshots/part5_scene1.png"
+                 alt="Adaptive sampling final render scene 1">
+            <figcaption class="caption">
+              Figure 44. Noise-free adaptive sampling render for scene 1.
+            </figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="screenshots/part5_scene1_rate.png"
+                 alt="Adaptive sampling rate image scene 1">
+            <figcaption class="caption">
+              Figure 45. Sampling-rate image for scene 1.
+            </figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <h3>Scene 2: Adaptive Sampling Result and Sampling-Rate Visualization</h3>
+      <div class="placeholder">
+        <p>
+          Choose the second scene and repeat the same analysis. State the render
+          settings again if they differ from the first scene, or explicitly note
+          that the same sampling settings were used. Identify the regions that drew
+          the most samples and explain why those areas are harder to converge.
+        </p>
+
+        <p>
+          Compare the second scene against the first one. Explain whether adaptive
+          sampling concentrated effort in similar types of regions or whether the
+          second scene produced a different sampling pattern because of different
+          geometry, visibility structure, or lighting variation.
+        </p>
+      </div>
+
+      <div class="twocol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="screenshots/part5_scene2.png"
+                 alt="Adaptive sampling final render scene 2">
+            <figcaption class="caption">
+              Figure 46. Noise-free adaptive sampling render for scene 2.
+            </figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="screenshots/part5_scene2_rate.png"
+                 alt="Adaptive sampling rate image scene 2">
+            <figcaption class="caption">
+              Figure 47. Sampling-rate image for scene 2.
+            </figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <div class="divider"></div>
+    </section>
+  
+
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="fineprint">
+        Ellie Ghazaleh and Johanna Liu · CS 184 · Spring 2026
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

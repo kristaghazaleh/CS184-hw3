@@ -1482,7 +1482,29 @@
           sampleCountBuffer, and the running luminance statistics used for the
           convergence test. State how many samples are taken before each convergence
           check and explain how the stopping rule decides whether a pixel has
-          converged.
+          converged.<br> <br>
+
+			The adaptive sampling algorithm here tests whether a given pixel has converged as we trace ray samples through it. 
+			Converging signifies that taking more samples no longer significantly changes the pixel’s color anymore. To do this, 
+			suppose that we have already taken $n$ samples through a pixel. We acquire the mean and standard deviation of this sample in order to 
+			calculate I, which is our confidence interval on the true pixel value. This interval represents 95% confidence that the true pixel value lies 
+			within mean ± I.
+			The smaller I is, the closer we know our estimate is from the true value of convergence, 
+			and so the more confidently we can conclude that the pixel has converged.
+			And so after calculating mean, standard deviation, and in turn I, we compare I against an error threshold - this is $maxTolerance$.
+			maxTolerance is the uncertainty we are willing to accept at which we stop sampling. I.e. if \(I <= maxTolerance\), we stop sampling/tracing more rays
+				for this pixel. <br> <br>
+
+				The implementation in pathtracer.cpp follows this logic. We build on the raytrace_pixel function to implement adapting sampling. We initialize 
+				s1 and s2 as 0 for calculating mean and santard deviation accumulatively in our existing loop. n is also initialized and kept as a counter as
+				how many loops (number of samples per pixel) we go before stopping. s1 and s2 are accumulated according to their respective formulas 
+				\(s_1 = \sum_{k=1}^n x_k\) and \(s_2 = \sum_{k=1}^n x_k^2\) to calculate \(\mu = \frac{s_1}{n}\) and \(\sigma^2 = \frac{1}{n-1} \cdot \left( s_2 - \frac{s_1^2}{n} \right)\)
+				
+				We convert radiance to illuminance with L.illum() to avoid having to use all R, G, and B values.
+				To avoid having to check every pixel’s convergence for each new sample, we use samplesPerBatch. n % samplesPerBatch checks whether a pixel has converged every 
+				samplesPerBatch samples instead. In short, samplesPerBatch samples are taken before each convergence check. We calculate the I at this point to check against maxTolerance. The sampling loop breaks if we have reached our desired
+				uncertainty threshold. sampleCountBuffer stores how many samples were used for each pixel, so we fill sampleCountBuffer with n (our actual number of samples per pixel) instead of num_samples.
+			
         </p>
 
         <p>

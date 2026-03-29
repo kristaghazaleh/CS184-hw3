@@ -64,7 +64,7 @@
 				In this project we implement the core components of a Monte Carlo path tracer. We begin by generating camera rays
 				from image-space samples, tracing the rays into the scene, and then computing intersections with geometric primitives.
 				We then accelerate scene traversal by improving the performance with a bounding volume hierarchy.
-				The bounding volume hierarchy reduces the cost of ray traversal effectively improving the rendering of more complicated
+				The bounding volume hierarchy reduces the cost of ray traversal, effectively improving the rendering of more complicated
 				scenes.
 			</p>
 			
@@ -79,7 +79,7 @@
 				From tracking our progress, we see early outputs such as ray-direction
 				and normal shading visualizations to physically based images with soft shadows,
 				indirect light transport, and improved sampling efficiency. One of the main ideas
-				reinforced by this project is that realistic rendering depends not only on geometric correctness,
+				reinforced by this project is that realistic rendering depends on geometric correctness,
 				efficient acceleration structures, and careful sampling strategies.
       </div>
 
@@ -1486,16 +1486,16 @@
 
 			The adaptive sampling algorithm here tests whether a given pixel has converged as we trace ray samples through it. 
 			Converging signifies that taking more samples no longer significantly changes the pixel’s color anymore. To do this, 
-			suppose that we have already taken $n$ samples through a pixel. We acquire the mean and standard deviation of this sample in order to 
+			suppose that we have already taken \(n\) samples through a pixel. We acquire the mean and standard deviation of this sample in order to 
 			calculate I, which is our confidence interval on the true pixel value. This (half-width) interval represents \(95%\) confidence that the true pixel value lies 
 			within \(mean \pm I\).
 			The smaller \(I\) is, the closer we know our estimate is from the true value of convergence, 
 			and so the more confidently we can conclude that the pixel has converged.
-			And so after calculating mean (\(\mu\)), standard deviation (\(\sigma^2\)), and in turn \(I\), we compare \(I\) against an error threshold scaled mean luminance: \(maxTolerance \cdot \mu\).
+			And so after calculating mean (\(\mu\)), standard deviation (\(\sigma^2\)), and in turn \(I\), we compare \(I\) against an error threshold-scaled mean luminance: \(maxTolerance \cdot \mu\).
 			\(maxTolerance\) is the uncertainty we are willing to accept at which we stop sampling. I.e. if \(I \leq maxTolerance \cdot \mu\), we stop sampling/tracing more rays
 				for this pixel. <br> <br>
 
-				The implementation in pathtracer.cpp follows this logic. We build on the raytrace_pixel function to implement adapting sampling. We initialize 
+				The implementation in \(pathtracer.cpp\) follows this logic. We build on the \(raytrace_pixel\) function to implement adaptive sampling. We initialize 
 				\(s1\) and \(s2\) as \(0\) for calculating mean and santard deviation accumulatively in our existing loop. \(n\) is also initialized and kept as a counter as
 				how many loops (number of samples per pixel) we go before stopping. \(s1\) and \(s2\) are accumulated according to their respective formulas 
 				\(s_1 = \sum_{k=1}^n x_k\) and \(s_2 = \sum_{k=1}^n x_k^2\) to calculate \(\mu = \frac{s_1}{n}\) and \(\sigma^2 = \frac{1}{n-1} \cdot \left( s_2 - \frac{s_1^2}{n} \right)\)

@@ -1493,7 +1493,7 @@
 			and so the more confidently we can conclude that the pixel has converged.
 			And so after calculating mean (\(\mu\)), standard deviation (\(\sigma^2\)), and in turn \(I\), we compare \(I\) against an error threshold-scaled mean luminance: \(maxTolerance \cdot \mu\). 
 			Since \(maxTolerance\) is the uncertainty we are willing to accept at which we stop sampling, if \(I \leq maxTolerance \cdot \mu\), we stop sampling/tracing more rays
-				for this pixel. We're asking if our error is small <i>relative<i> to how bright this pixel actually is (mean luminance). <br> <br>
+				for this pixel. We're asking if our error is small <em>relative</em> to how bright this pixel actually is (mean luminance). <br> <br>
 
 				The implementation in \(pathtracer.cpp\) follows this logic. We build on the \(raytrace_pixel\) function to implement adaptive sampling. We initialize 
 				\(s1\) and \(s2\) as \(0\) for calculating mean and santard deviation accumulatively in our existing loop. \(n\) is also initialized and kept as a counter as

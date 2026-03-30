@@ -35,7 +35,7 @@
       <div class="meta">
         <div><span class="meta-label">Term:</span> Spring 2026</div>
         <div><span class="meta-label">Repo:</span> hw3-pathtracer-insomniac</div>
-		<div><span class="meta-label">Link to webpage:</span> <a href="https://kristaghazaleh.github.io/CS184-hw3/">kristaghazaleh.github.io/CS184-hw3/</a>
+		<div><span class="meta-label">Link to webpage:</span> <a href="https://kristaghazaleh.github.io/CS184_hw2/">kristaghazaleh.github.io/CS184_hw3/</a>
 		<div><span class="meta-label">Link to repo:</span> <a href="https://github.com/cal-cs184-student/hw3-pathtracer-insomniac.git">https://github.com/cal-cs184-student/hw3-pathtracer-insomniac</a>
       </div>
     </div>
@@ -64,7 +64,7 @@
 				In this project we implement the core components of a Monte Carlo path tracer. We begin by generating camera rays
 				from image-space samples, tracing the rays into the scene, and then computing intersections with geometric primitives.
 				We then accelerate scene traversal by improving the performance with a bounding volume hierarchy.
-				The bounding volume hierarchy reduces the cost of ray traversal, effectively improving the rendering of more complicated
+				The bounding volume hierarchy reduces the cost of ray traversal effectively improving the rendering of more complicated
 				scenes.
 			</p>
 			
@@ -79,7 +79,7 @@
 				From tracking our progress, we see early outputs such as ray-direction
 				and normal shading visualizations to physically based images with soft shadows,
 				indirect light transport, and improved sampling efficiency. One of the main ideas
-				reinforced by this project is that realistic rendering depends on geometric correctness,
+				reinforced by this project is that realistic rendering depends not only on geometric correctness,
 				efficient acceleration structures, and careful sampling strategies.
       </div>
 
@@ -1477,119 +1477,230 @@
       <h3>Implementation of Adaptive Sampling</h3>
       <div class="placeholder">
         <p>
-			The adaptive sampling algorithm here tests whether a given pixel has converged as we trace ray samples through it. 
-			Converging signifies that taking more samples no longer significantly changes the pixel’s color anymore. To do this, 
-			suppose that we have already taken \(n\) samples through a pixel. We acquire the mean and standard deviation of this sample in order to 
-			calculate I, which is our confidence interval on the true pixel value. This (half-width) interval represents \(95%\) confidence that the true pixel value lies 
-			within \(mean \pm I\).
-			The smaller \(I\) is, the closer we know our estimate is from the true value of convergence, 
-			and so the more confidently we can conclude that the pixel has converged.
-			And so after calculating mean (\(\mu\)), standard deviation (\(\sigma^2\)), and in turn \(I\), we compare \(I\) against an error threshold-scaled mean luminance: \(maxTolerance \cdot \mu\). 
-			Since \(maxTolerance\) is the uncertainty we are willing to accept at which we stop sampling, if \(I \leq maxTolerance \cdot \mu\), we stop sampling/tracing more rays
-				for this pixel. We're asking if our error is small <em>relative</em> to how bright this pixel actually is (mean luminance). <br> <br>
-
-				The implementation in \(pathtracer.cpp\) follows this logic. We build on the \(raytrace_pixel\) function to implement adaptive sampling. We initialize 
-				\(s1\) and \(s2\) as \(0\) for calculating mean and santard deviation accumulatively in our existing loop. \(n\) is also initialized and kept as a counter as
-				how many loops (number of samples per pixel) we go before stopping. \(s1\) and \(s2\) are accumulated according to their respective formulas 
-				\(s_1 = \sum_{k=1}^n x_k\) and \(s_2 = \sum_{k=1}^n x_k^2\) to calculate \(\mu = \frac{s_1}{n}\) and \(\sigma^2 = \frac{1}{n-1} \cdot \left( s_2 - \frac{s_1^2}{n} \right)\).
-				
-				We convert radiance to illuminance with \(L.illum()\) to avoid having to use all R, G, and B values.
-				To avoid having to check every pixel’s convergence for each new sample, we use \(samplesPerBatch\). \(n % samplesPerBatch\) checks whether a pixel has converged every 
-				\(samplesPerBatch\) samples instead. In short, \(samplesPerBatch\) samples are taken before each convergence check. We calculate the \(I\) at this point to check against \(maxTolerance \cdot \mu\), 
-					our convergence condition. 
-			Aka the sampling loop breaks if we have reached our desired uncertainty threshold, and keeps going if not. \(sampleCountBuffer\) stores how many samples were used for each pixel, 
-			so we fill it with \(n\) (our actual number of samples per pixel) instead of \(num_samples\) to take into account changes we've made to implement
-			adaptive sampling. 
-			<br> <br>
-			In general, pixels with high variance \(\sigma\) means their samples vary a lot, meaning the pixels are still uncertain, so we continue sampling.
-			On the other hand, pixels with lower variance \(\sigma\) have similar samples, and so are stable, meaning we can terminate earlier. This
-					is ultimately related to why adaptive sampling concentrates work along difficult regions
-          like geometric edges, shadow boundaries, and detailed lighting changes. Edges, shadows, and detailed lighting have high variance. At edges,
-					single pixels have high variance because each sample can easily hit both the background or the object, so sampled values vary a lot.
-					At shadows, each sample can hit either vsisible light or shadows (light is blocked), making again the variance high at these areas. Detailed
-			lighting changes signify that rays bounce randomly and so sampled paths hit different rays a lot. Variance is high.
-
-					These reasons are why adaptive sampling have to use more rays at these areas than stabler areas. On the other hand, flat walls and other
-					low-variance pixels require less sampling since they are stable, and so of course converge much sooner. 
+          The adaptive sampling algorithm here tests whether a given pixel has converged as we trace ray samples through it.
+          Convergence means that taking more samples no longer changes the estimated pixel color by very much. Instead of
+          forcing every pixel to use the full maximum number of samples, we keep sampling until the estimate is stable enough.
+          This lets the renderer spend more work on difficult pixels and less work on smooth ones.
         </p>
 
-        
+        <p>
+          Suppose that we have already taken \(n\) samples through a pixel. For each sample we evaluate radiance and then
+          convert it to a single scalar value using illuminance, so each sample contributes a value \(x_k\). We keep two
+          running sums,
+        </p>
+
+        \[
+          s_1 = \sum_{k=1}^{n} x_k,
+        \]
+        \[
+          s_2 = \sum_{k=1}^{n} x_k^2.
+        \]
+
+        <p>
+          From these, we compute the sample mean
+        </p>
+
+        \[
+          \mu = \frac{s_1}{n},
+        \]
+
+        <p>
+          and the sample variance
+        </p>
+
+        \[
+          \sigma^2 = \frac{1}{n-1}\left(s_2 - \frac{s_1^2}{n}\right).
+        \]
+
+        <p>
+          Taking \(\sigma = \sqrt{\sigma^2}\), we then compute the half-width of the \(95\%\) confidence interval as
+        </p>
+
+        \[
+          I = 1.96 \cdot \frac{\sigma}{\sqrt{n}}.
+        \]
+
+        <p>
+          This means we are \(95\%\) confident that the true pixel value lies within \(\mu \pm I\). The smaller \(I\) is,
+          the closer our estimate is to the true converged value, and so the more confidently we can conclude that the pixel
+          has converged.
+        </p>
+
+        <p>
+          After calculating \(\mu\), \(\sigma^2\), and in turn \(I\), we compare \(I\) against an error-threshold-scaled
+          mean luminance,
+        </p>
+
+        \[
+          I \leq \texttt{maxTolerance} \cdot \mu.
+        \]
+
+        <p>
+          If this condition is true, we stop sampling that pixel. In other words, we are asking whether the uncertainty is
+          small relative to how bright the pixel actually is. If the condition is false, then the pixel is still too noisy,
+          so sampling continues.
+        </p>
+
+        <p>
+          The implementation in pathtracer.cpp follows this logic inside raytrace_pixel. We initialize \(s_1\), \(s_2\),
+          and a counter \(n\), then accumulate radiance samples in the usual pixel loop. For adaptive sampling, each sample
+          contributes its scalar illuminance through \(L.\mathrm{illum}()\), so we do not have to track three separate RGB
+          confidence intervals. We also keep a separate radiance sum for the final color, and once the loop ends we divide
+          the accumulated radiance by the actual number of samples taken, not by the maximum allowed number of samples.
+        </p>
+
+        <p>
+          To avoid checking convergence after every single new sample, we use the parameter samplesPerBatch. In our final
+          renders, this means that 64 samples are taken before each convergence test. Every time \(n\) is a multiple of
+          samplesPerBatch, we evaluate the statistics above and decide whether to continue. This makes the adaptive test much
+          cheaper than checking after every individual sample while still reacting often enough to stop early on stable pixels.
+        </p>
+
+        <p>
+          The sampleCountBuffer stores the actual number of samples used for each pixel. This is important because the
+          sampling-rate image is built from these values. If a pixel converges early, sampleCountBuffer records that smaller
+          count. If the pixel never satisfies the stopping condition, then it simply uses the maximum allowed samples.
+        </p>
+
+        <p>
+          In general, pixels with high variance have samples that differ a lot, which means the pixel is still uncertain, so
+          we continue sampling. Pixels with lower variance have more similar samples and are therefore more stable, so they
+          can terminate earlier. This is why adaptive sampling concentrates work along difficult regions such as geometric
+          edges, shadow boundaries, contact shadows, fine silhouette detail, and strong lighting transitions near the area
+          light. At edges, one sample can land on the object while another lands on the background, so the values vary a lot.
+          Near shadows, samples may alternate between visible light and occluded regions, which again produces high variance.
+          By contrast, flat walls and other smooth low-variance regions produce much more similar samples, so they require
+          fewer rays and converge much sooner.
+        </p>
+
+        <p>
+          All images in this section were generated with adaptive sampling enabled, using at least 2048 maximum samples per
+          pixel, 1 sample per light, and maximum ray depth 5, as required by the assignment. We generated the final images
+          as renderer outputs rather than operating-system screenshots.
+        </p>
       </div>
 
-      <h3>Scene 1: Adaptive Sampling Result and Sampling-Rate Visualization</h3>
+      <h3>CBbunny: Matching the Example and Sampling-Rate Visualization</h3>
       <div class="placeholder">
         <p>
-          Choose the first scene and report the render settings used for this
-          comparison. State that the render used at least 2048 samples per pixel,
-          1 sample per light, and at least 5 for maximum ray depth. Describe where
-          the sampling-rate image is brightest or darkest and explain what those
-          regions reveal about variance in the scene.
+          We first rendered CBbunny using adaptive sampling with 2048 maximum samples per pixel, 1 sample per light,
+          maximum ray depth 5, batch size 64, and tolerance 0.05. This scene was our main check that the implementation
+          matched the expected behavior from the assignment example. In the final rendered image, the bunny and Cornell box
+          are smooth and effectively noise-free, while the sampling-rate image shows that the broad back wall and other
+          relatively uniform regions converge much more quickly and remain blue or green.
         </p>
 
         <p>
-          Compare the final rendered image against the corresponding sampling-rate
-          image. Explain which parts of the image required the most samples and why.
-          Connect the visual pattern in the rate image to edges, shadows, fine
-          geometric structure, or other difficult regions in the final render.
+          The regions that require the most samples are the bunny silhouette, the contact shadow on the floor, the bright
+          floor patch under the bunny, and the transition regions near the ceiling light. These are exactly the areas where
+          visibility and radiance change the most from sample to sample. By contrast, large smooth parts of the back wall,
+          the side walls, and other low-variance regions do not need nearly as many samples. This scene gave us the clearest
+          confirmation that the implementation was functioning correctly, since the sampling-rate image showed the same
+          overall pattern as the reference example: difficult geometric and lighting boundaries received the most work, while
+          broad stable regions converged earlier.
         </p>
       </div>
 
       <div class="twocol">
         <figure class="figure">
           <div class="figure-box">
-            <img src="screenshots/part5_scene1.png"
-                 alt="Adaptive sampling final render scene 1">
+            <img src="part5/bunny5.png"
+                 alt="Adaptive sampling final render for CBbunny">
             <figcaption class="caption">
-              Figure 44. Noise-free adaptive sampling render for scene 1.
+              Figure 44. Adaptive sampling render for CBbunny with 2048 max samples per pixel, 1 light sample, maximum ray depth 5, batch size 64, and tolerance 0.05.
             </figcaption>
           </div>
         </figure>
 
         <figure class="figure">
           <div class="figure-box">
-            <img src="screenshots/part5_scene1_rate.png"
-                 alt="Adaptive sampling rate image scene 1">
+            <img src="part5/bunny_rate5.png"
+                 alt="Adaptive sampling rate image for CBbunny">
             <figcaption class="caption">
-              Figure 45. Sampling-rate image for scene 1.
+              Figure 45. Sampling-rate image for CBbunny.
             </figcaption>
           </div>
         </figure>
       </div>
 
-      <h3>Scene 2: Adaptive Sampling Result and Sampling-Rate Visualization</h3>
+      <h3>Additional Scenes: CBspheres and CBdragon</h3>
       <div class="placeholder">
         <p>
-          Choose the second scene and repeat the same analysis. State the render
-          settings again if they differ from the first scene, or explicitly note
-          that the same sampling settings were used. Identify the regions that drew
-          the most samples and explain why those areas are harder to converge.
+          After verifying the implementation on CBbunny, we rendered two additional scenes using the same adaptive
+          sampling settings: 2048 maximum samples per pixel, 1 sample per light, maximum ray depth 5, batch size 64,
+          and tolerance 0.05. These extra scenes helped us see how the adaptive sampler behaves on different kinds of
+          geometry and shading. CBspheres emphasizes smoother curvature, broader tonal gradients, and soft shadow
+          transitions, while CBdragon adds more intricate silhouette detail and a darker object inside the Cornell box.
         </p>
 
         <p>
-          Compare the second scene against the first one. Explain whether adaptive
-          sampling concentrated effort in similar types of regions or whether the
-          second scene produced a different sampling pattern because of different
-          geometry, visibility structure, or lighting variation.
+          In both scenes, the same general trend appears: uniform walls and other smooth low-variance regions converge
+          faster, while edges, contact shadows, silhouette boundaries, and regions near the ceiling light require more
+          samples. The exact distribution changes from scene to scene, but the adaptive sampler consistently spends more
+          work where the radiance estimate is less stable.
         </p>
       </div>
 
       <div class="twocol">
         <figure class="figure">
           <div class="figure-box">
-            <img src="screenshots/part5_scene2.png"
-                 alt="Adaptive sampling final render scene 2">
+            <img src="part5/CBspheres5.png"
+                 alt="Adaptive sampling final render for CBspheres">
             <figcaption class="caption">
-              Figure 46. Noise-free adaptive sampling render for scene 2.
+              Figure 46. Adaptive sampling render for CBspheres using the same settings as CBbunny.
             </figcaption>
           </div>
         </figure>
 
         <figure class="figure">
           <div class="figure-box">
-            <img src="screenshots/part5_scene2_rate.png"
-                 alt="Adaptive sampling rate image scene 2">
+            <img src="part5/CBspheres_rate5.png"
+                 alt="Adaptive sampling rate image for CBspheres">
             <figcaption class="caption">
-              Figure 47. Sampling-rate image for scene 2.
+              Figure 47. Sampling-rate image for CBspheres.
+            </figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <div class="placeholder">
+        <p>
+          In CBspheres, adaptive sampling concentrates effort around the sphere silhouettes, the soft shadow boundaries on
+          the floor, and the brighter regions near the light source. These are the parts of the image where lighting changes
+          more rapidly, especially across curved surfaces and across the transitions from illuminated to shadowed regions.
+          The flatter walls converge sooner because neighboring samples produce more similar values there. Compared with
+          CBbunny, this scene has simpler geometry, but it still shows clearly that shadow boundaries and curved shading
+          gradients remain harder to converge than large flat surfaces.
+        </p>
+
+        <p>
+          In CBdragon, the dragon appears much darker than the surrounding box, but the sampling-rate image still makes the
+          difficult regions very clear. More samples are allocated around the dragon outline, the contact shadow, the floor
+          region directly under the object, and the lighting transition under the ceiling light. Even though the object
+          itself is darker, the adaptive sampler still responds to variance rather than simply to brightness, so the
+          silhouette and visibility-change regions stand out as the hardest parts to converge. This makes CBdragon a useful
+          additional comparison, because it shows that the method behaves sensibly even when the object is much darker than
+          the surrounding scene.
+        </p>
+      </div>
+
+      <div class="twocol">
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part5/CBdragon_5.png"
+                 alt="Adaptive sampling final render for CBdragon">
+            <figcaption class="caption">
+              Figure 48. Adaptive sampling render for CBdragon using the same settings as CBbunny.
+            </figcaption>
+          </div>
+        </figure>
+
+        <figure class="figure">
+          <div class="figure-box">
+            <img src="part5/CBdragon_rate5.png"
+                 alt="Adaptive sampling rate image for CBdragon">
+            <figcaption class="caption">
+              Figure 49. Sampling-rate image for CBdragon.
             </figcaption>
           </div>
         </figure>

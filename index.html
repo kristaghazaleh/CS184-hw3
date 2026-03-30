@@ -1491,25 +1491,33 @@
 			within \(mean \pm I\).
 			The smaller \(I\) is, the closer we know our estimate is from the true value of convergence, 
 			and so the more confidently we can conclude that the pixel has converged.
-			And so after calculating mean (\(\mu\)), standard deviation (\(\sigma^2\)), and in turn \(I\), we compare \(I\) against an error threshold-scaled mean luminance: \(maxTolerance \cdot \mu\).
-			\(maxTolerance\) is the uncertainty we are willing to accept at which we stop sampling. I.e. if \(I \leq maxTolerance \cdot \mu\), we stop sampling/tracing more rays
-				for this pixel. <br> <br>
+			And so after calculating mean (\(\mu\)), standard deviation (\(\sigma^2\)), and in turn \(I\), we compare \(I\) against an error threshold-scaled mean luminance: \(maxTolerance \cdot \mu\). 
+			Since \(maxTolerance\) is the uncertainty we are willing to accept at which we stop sampling, if \(I \leq maxTolerance \cdot \mu\), we stop sampling/tracing more rays
+				for this pixel. We're asking if our error is small <i>relative<i> to how bright this pixel actually is (mean luminance). <br> <br>
 
 				The implementation in \(pathtracer.cpp\) follows this logic. We build on the \(raytrace_pixel\) function to implement adaptive sampling. We initialize 
 				\(s1\) and \(s2\) as \(0\) for calculating mean and santard deviation accumulatively in our existing loop. \(n\) is also initialized and kept as a counter as
 				how many loops (number of samples per pixel) we go before stopping. \(s1\) and \(s2\) are accumulated according to their respective formulas 
-				\(s_1 = \sum_{k=1}^n x_k\) and \(s_2 = \sum_{k=1}^n x_k^2\) to calculate \(\mu = \frac{s_1}{n}\) and \(\sigma^2 = \frac{1}{n-1} \cdot \left( s_2 - \frac{s_1^2}{n} \right)\)
+				\(s_1 = \sum_{k=1}^n x_k\) and \(s_2 = \sum_{k=1}^n x_k^2\) to calculate \(\mu = \frac{s_1}{n}\) and \(\sigma^2 = \frac{1}{n-1} \cdot \left( s_2 - \frac{s_1^2}{n} \right)\).
 				
 				We convert radiance to illuminance with \(L.illum()\) to avoid having to use all R, G, and B values.
 				To avoid having to check every pixel’s convergence for each new sample, we use \(samplesPerBatch\). \(n % samplesPerBatch\) checks whether a pixel has converged every 
-				\(samplesPerBatch\) samples instead. In short, \(samplesPerBatch\) samples are taken before each convergence check. We calculate the \(I\) at this point to check against \(maxTolerance\). 
-			The sampling loop breaks if we have reached our desired uncertainty threshold, and keeps going if not. \(sampleCountBuffer\) stores how many samples were used for each pixel, 
+				\(samplesPerBatch\) samples instead. In short, \(samplesPerBatch\) samples are taken before each convergence check. We calculate the \(I\) at this point to check against \(maxTolerance \cdot \mu\), 
+					our convergence condition. 
+			Aka the sampling loop breaks if we have reached our desired uncertainty threshold, and keeps going if not. \(sampleCountBuffer\) stores how many samples were used for each pixel, 
 			so we fill it with \(n\) (our actual number of samples per pixel) instead of \(num_samples\) to take into account changes we've made to implement
 			adaptive sampling. 
 			<br> <br>
 			In general, pixels with high variance \(\sigma\) means their samples vary a lot, meaning the pixels are still uncertain, so we continue sampling.
-			On the other hand, pixels with lower variance \(\sigma\) have similar samples, and so are stable, meaning we can terminate earlier. 
-			
+			On the other hand, pixels with lower variance \(\sigma\) have similar samples, and so are stable, meaning we can terminate earlier. This
+					is ultimately related to why adaptive sampling concentrates work along difficult regions
+          like geometric edges, shadow boundaries, and detailed lighting changes. Edges, shadows, and detailed lighting have high variance. At edges,
+					single pixels have high variance because each sample can easily hit both the background or the object, so sampled values varies a lot.
+					At shadows, each sample can hit either vsisible light or shadows (light is blocked), making again the variance high at these areas. Detailed
+			lighting changes signify that rays bounce randomly and so sampled paths hit different rays a lot. Variance is high.
+
+					These reasons are why adaptive sampling have to use more rays at these areas than stabler areas. On the other hand, flat walls and other
+					low-variance pixels require less sampling since they are stable, and so of course converge much sooner. 
         </p>
 
         <p>
@@ -1527,6 +1535,9 @@
           Explain why flat walls and other low-variance regions tend to converge
           much sooner. This subsection should directly answer the requirement to
           explain adaptive sampling and describe how the implementation works.
+
+
+			
         </p>
       </div>
 

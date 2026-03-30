@@ -1477,12 +1477,7 @@
       <h3>Implementation of Adaptive Sampling</h3>
       <div class="placeholder">
         <p>
-          Explain the adaptive sampling algorithm and walk through the implementation
-          in pathtracer.cpp. Define the role of samplesPerBatch, maxTolerance,
-          sampleCountBuffer, and the running luminance statistics used for the
-          convergence test. State how many samples are taken before each convergence
-          check and explain how the stopping rule decides whether a pixel has
-          converged.<br> <br>
+          <br> <br>
 
 			The adaptive sampling algorithm here tests whether a given pixel has converged as we trace ray samples through it. 
 			Converging signifies that taking more samples no longer significantly changes the pixel’s color anymore. To do this, 
@@ -1512,7 +1507,7 @@
 			On the other hand, pixels with lower variance \(\sigma\) have similar samples, and so are stable, meaning we can terminate earlier. This
 					is ultimately related to why adaptive sampling concentrates work along difficult regions
           like geometric edges, shadow boundaries, and detailed lighting changes. Edges, shadows, and detailed lighting have high variance. At edges,
-					single pixels have high variance because each sample can easily hit both the background or the object, so sampled values varies a lot.
+					single pixels have high variance because each sample can easily hit both the background or the object, so sampled values vary a lot.
 					At shadows, each sample can hit either vsisible light or shadows (light is blocked), making again the variance high at these areas. Detailed
 			lighting changes signify that rays bounce randomly and so sampled paths hit different rays a lot. Variance is high.
 
@@ -1520,25 +1515,7 @@
 					low-variance pixels require less sampling since they are stable, and so of course converge much sooner. 
         </p>
 
-        <p>
-          Include the confidence-interval test used in the assignment. Define the
-          sample mean luminance, the sample variance estimate, the quantity
-          corresponding to the half-width of the confidence interval, and the
-          convergence condition that compares that interval size against the scaled
-          mean luminance. Explain that pixels with high variance continue receiving
-          more samples, while smooth low-variance pixels terminate earlier.
-        </p>
-
-        <p>
-          Discuss why adaptive sampling concentrates work along difficult regions
-          such as geometric edges, shadow boundaries, and detailed lighting changes.
-          Explain why flat walls and other low-variance regions tend to converge
-          much sooner. This subsection should directly answer the requirement to
-          explain adaptive sampling and describe how the implementation works.
-
-
-			
-        </p>
+        
       </div>
 
       <h3>Scene 1: Adaptive Sampling Result and Sampling-Rate Visualization</h3>
